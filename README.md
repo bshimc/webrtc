@@ -209,6 +209,7 @@ Check out the **[contributing wiki](https://github.com/pion/webrtc/wiki/Contribu
 * [Assad Obaid](https://github.com/assadobaid)
 * [Jamie Good](https://github.com/jamiegood) - *Bug fix in jsfiddle example*
 * [Artur Shellunts](https://github.com/ashellunts)
+* [Bo Shi](https://github.com/bshimc)
 
 ### License
 MIT License - see [LICENSE](LICENSE) for full text

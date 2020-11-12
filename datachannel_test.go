@@ -15,7 +15,7 @@ import (
 // bindings this is a requirement).
 const expectedLabel = "data"
 
-func closePairNow(t *testing.T, pc1, pc2 io.Closer) {
+func closePairNow(t testing.TB, pc1, pc2 io.Closer) {
 	var fail bool
 	if err := pc1.Close(); err != nil {
 		t.Errorf("Failed to close PeerConnection: %v", err)
@@ -61,6 +61,44 @@ func closeReliabilityParamTest(t *testing.T, pc1, pc2 *PeerConnection, done chan
 	}
 
 	closePair(t, pc1, pc2, done)
+}
+
+// See https://github.com/pion/webrtc/issues/1516
+func BenchmarkDataChannelSend(b *testing.B) {
+	offerPC, answerPC, err := newPair()
+	if err != nil {
+		b.Fatalf("Failed to create a PC pair for testing")
+	}
+
+	var (
+		answerOpen = make(chan bool)
+		done       = make(chan bool)
+	)
+	answerPC.OnDataChannel(func(d *DataChannel) {
+		if d.Label() != expectedLabel {
+			return
+		}
+		d.OnOpen(func() {
+			answerOpen <- true
+		})
+	})
+
+	dc, err := offerPC.CreateDataChannel(expectedLabel, nil)
+	assert.NoError(b, err)
+
+	dc.OnOpen(func() {
+		<-answerOpen
+		for n := 0; n < b.N; n++ {
+			if err := dc.SendText("Ping"); err != nil {
+				b.Fatalf("Unexpected error sending data: %v", err)
+			}
+		}
+		done <- true
+	})
+
+	assert.NoError(b, signalPair(offerPC, answerPC))
+	<-done
+	closePairNow(b, offerPC, answerPC)
 }
 
 func TestDataChannel_Open(t *testing.T) {
