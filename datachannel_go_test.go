@@ -20,6 +20,10 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func newDataChannelMessage(b []byte) *DataChannelMessage {
+	return &DataChannelMessage{Data: ioutil.NopCloser(bytes.NewBuffer(b))}
+}
+
 func TestDataChannel_EventHandlers(t *testing.T) {
 	to := test.TimeOut(time.Second * 20)
 	defer to.Stop()
@@ -40,13 +44,14 @@ func TestDataChannel_EventHandlers(t *testing.T) {
 		close(onOpenCalled)
 	})
 
-	dc.OnMessage(func(p DataChannelMessage) {
+	dc.OnMessage(func(p *DataChannelMessage) {
+		defer p.Data.Close()
 		close(onMessageCalled)
 	})
 
 	// Verify that the set handlers are called
 	assert.NotPanics(t, func() { dc.onOpen() })
-	assert.NotPanics(t, func() { dc.onMessage(DataChannelMessage{Data: []byte("o hai")}) })
+	assert.NotPanics(t, func() { dc.onMessage(newDataChannelMessage([]byte("o hai"))) })
 
 	// Wait for all handlers to be called
 	<-onOpenCalled
@@ -62,7 +67,8 @@ func TestDataChannel_MessagesAreOrdered(t *testing.T) {
 
 	max := 512
 	out := make(chan int)
-	inner := func(msg DataChannelMessage) {
+	inner := func(msg *DataChannelMessage) {
+		defer msg.Data.Close()
 		// randomly sleep
 		// math/rand a weak RNG, but this does not need to be secure. Ignore with #nosec
 		/* #nosec */
@@ -71,10 +77,10 @@ func TestDataChannel_MessagesAreOrdered(t *testing.T) {
 			t.Fatalf("Failed to get random sleep duration: %s", err)
 		}
 		time.Sleep(time.Duration(randInt.Int64()) * time.Microsecond)
-		s, _ := binary.Varint(msg.Data)
+		s, _ := binary.Varint(readClose(t, msg.Data))
 		out <- int(s)
 	}
-	dc.OnMessage(func(p DataChannelMessage) {
+	dc.OnMessage(func(p *DataChannelMessage) {
 		inner(p)
 	})
 
@@ -82,11 +88,11 @@ func TestDataChannel_MessagesAreOrdered(t *testing.T) {
 		for i := 1; i <= max; i++ {
 			buf := make([]byte, 8)
 			binary.PutVarint(buf, int64(i))
-			dc.onMessage(DataChannelMessage{Data: buf})
+			dc.onMessage(newDataChannelMessage(buf))
 			// Change the registered handler a couple of times to make sure
 			// that everything continues to work, we don't lose messages, etc.
 			if i%2 == 0 {
-				handler := func(msg DataChannelMessage) {
+				handler := func(msg *DataChannelMessage) {
 					inner(msg)
 				}
 				dc.OnMessage(handler)
@@ -190,7 +196,8 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 				return
 			}
 			var nPacketsReceived int
-			d.OnMessage(func(msg DataChannelMessage) {
+			d.OnMessage(func(msg *DataChannelMessage) {
+				defer msg.Data.Close()
 				nPacketsReceived++
 
 				if nPacketsReceived == 10 {
@@ -221,8 +228,7 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 			}
 		})
 
-		dc.OnMessage(func(msg DataChannelMessage) {
-		})
+		dc.OnMessage(func(msg *DataChannelMessage) { msg.Data.Close() })
 
 		// The value is temporarily stored in the dc object
 		// until the dc gets opened
@@ -264,7 +270,8 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 				return
 			}
 			var nPacketsReceived int
-			d.OnMessage(func(msg DataChannelMessage) {
+			d.OnMessage(func(msg *DataChannelMessage) {
+				defer msg.Data.Close()
 				nPacketsReceived++
 
 				if nPacketsReceived == 10 {
@@ -302,8 +309,7 @@ func TestDataChannelBufferedAmount(t *testing.T) {
 			}
 		})
 
-		dc.OnMessage(func(msg DataChannelMessage) {
-		})
+		dc.OnMessage(func(msg *DataChannelMessage) { msg.Data.Close() })
 
 		err = signalPair(offerPC, answerPC)
 		if err != nil {
@@ -471,9 +477,10 @@ func TestEOF(t *testing.T) {
 
 			// Register the OnMessage to handle incoming messages
 			log.Debug("pcb: registering onMessage callback")
-			dcb.OnMessage(func(dcMsg DataChannelMessage) {
-				log.Debugf("pcb: received ping: %s\n", string(dcMsg.Data))
-				if !reflect.DeepEqual(dcMsg.Data, testData) {
+			dcb.OnMessage(func(dcMsg *DataChannelMessage) {
+				b := readClose(t, dcMsg.Data)
+				log.Debugf("pcb: received ping: %q\n", b)
+				if !reflect.DeepEqual(b, testData) {
 					t.Error("data mismatch")
 				}
 			})
@@ -502,9 +509,10 @@ func TestEOF(t *testing.T) {
 
 		// Register the OnMessage to handle incoming messages
 		log.Debug("pca: registering onMessage callback")
-		dca.OnMessage(func(dcMsg DataChannelMessage) {
-			log.Debugf("pca: received pong: %s\n", string(dcMsg.Data))
-			if !reflect.DeepEqual(dcMsg.Data, testData) {
+		dca.OnMessage(func(dcMsg *DataChannelMessage) {
+			b := readClose(t, dcMsg.Data)
+			log.Debugf("pca: received pong: %q\n", b)
+			if !reflect.DeepEqual(b, testData) {
 				t.Error("data mismatch")
 			}
 		})

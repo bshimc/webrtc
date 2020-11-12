@@ -2,6 +2,7 @@ package webrtc
 
 import (
 	"io"
+	"io/ioutil"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,20 @@ import (
 // Some other channels may have been created during initialization (in the Wasm
 // bindings this is a requirement).
 const expectedLabel = "data"
+
+func readStringClose(t testing.TB, r io.ReadCloser) string {
+	t.Helper()
+	return string(readClose(t, r))
+}
+
+func readClose(t testing.TB, r io.ReadCloser) []byte {
+	t.Helper()
+	b, err := ioutil.ReadAll(r)
+	if err != nil {
+		t.Fatalf("Reading from ReadCloser: %v", err)
+	}
+	return b
+}
 
 func closePairNow(t testing.TB, pc1, pc2 io.Closer) {
 	var fail bool
@@ -121,8 +136,9 @@ func TestDataChannel_Open(t *testing.T) {
 			d.OnOpen(func() {
 				openCalls <- true
 			})
-			d.OnMessage(func(msg DataChannelMessage) {
+			d.OnMessage(func(msg *DataChannelMessage) {
 				go func() {
+					defer msg.Data.Close()
 					// Wait a little bit to ensure all messages are processed.
 					time.Sleep(100 * time.Millisecond)
 					done <- true
@@ -166,7 +182,8 @@ func TestDataChannel_Send(t *testing.T) {
 			if d.Label() != expectedLabel {
 				return
 			}
-			d.OnMessage(func(msg DataChannelMessage) {
+			d.OnMessage(func(msg *DataChannelMessage) {
+				defer msg.Data.Close()
 				e := d.Send([]byte("Pong"))
 				if e != nil {
 					t.Fatalf("Failed to send string on data channel")
@@ -188,7 +205,8 @@ func TestDataChannel_Send(t *testing.T) {
 				t.Fatalf("Failed to send string on data channel")
 			}
 		})
-		dc.OnMessage(func(msg DataChannelMessage) {
+		dc.OnMessage(func(msg *DataChannelMessage) {
+			defer msg.Data.Close()
 			done <- true
 		})
 
@@ -217,7 +235,8 @@ func TestDataChannel_Send(t *testing.T) {
 			if d.Label() != expectedLabel {
 				return
 			}
-			d.OnMessage(func(msg DataChannelMessage) {
+			d.OnMessage(func(msg *DataChannelMessage) {
+				defer msg.Data.Close()
 				e := d.Send([]byte("Pong"))
 				if e != nil {
 					t.Fatalf("Failed to send string on data channel")
@@ -238,7 +257,8 @@ func TestDataChannel_Send(t *testing.T) {
 
 					assert.True(t, dc.Ordered(), "Ordered should be set to true")
 
-					dc.OnMessage(func(msg DataChannelMessage) {
+					dc.OnMessage(func(msg *DataChannelMessage) {
+						defer msg.Data.Close()
 						done <- true
 					})
 
@@ -415,14 +435,14 @@ func TestDataChannelParameters(t *testing.T) {
 		seenAnswerMessage := &atomicBool{}
 		seenOfferMessage := &atomicBool{}
 
-		answerDatachannel.OnMessage(func(msg DataChannelMessage) {
-			if msg.IsString && string(msg.Data) == expectedMessage {
+		answerDatachannel.OnMessage(func(msg *DataChannelMessage) {
+			if msg.IsString && readStringClose(t, msg.Data) == expectedMessage {
 				seenAnswerMessage.set(true)
 			}
 		})
 
-		offerDatachannel.OnMessage(func(msg DataChannelMessage) {
-			if msg.IsString && string(msg.Data) == expectedMessage {
+		offerDatachannel.OnMessage(func(msg *DataChannelMessage) {
+			if msg.IsString && readStringClose(t, msg.Data) == expectedMessage {
 				seenOfferMessage.set(true)
 			}
 		})

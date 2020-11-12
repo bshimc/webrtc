@@ -3,6 +3,7 @@
 package webrtc
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -44,7 +45,7 @@ type DataChannel struct {
 	// "blob". This attribute controls how binary data is exposed to scripts.
 	// binaryType                 string
 
-	onMessageHandler    func(DataChannelMessage)
+	onMessageHandler    func(*DataChannelMessage)
 	openHandlerOnce     sync.Once
 	onOpenHandler       func()
 	onCloseHandler      func()
@@ -260,13 +261,13 @@ func (d *DataChannel) onClose() {
 // in size. Check out the detach API if you want to use larger
 // message sizes. Note that browser support for larger messages
 // is also limited.
-func (d *DataChannel) OnMessage(f func(msg DataChannelMessage)) {
+func (d *DataChannel) OnMessage(f func(msg *DataChannelMessage)) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.onMessageHandler = f
 }
 
-func (d *DataChannel) onMessage(msg DataChannelMessage) {
+func (d *DataChannel) onMessage(msg *DataChannelMessage) {
 	d.mu.RLock()
 	handler := d.onMessageHandler
 	d.mu.RUnlock()
@@ -313,16 +314,31 @@ func (d *DataChannel) onError(err error) {
 
 // See https://github.com/pion/webrtc/issues/1516
 // nolint:gochecknoglobals
-var rlBufPool = sync.Pool{New: func() interface{} {
-	return make([]byte, dataChannelBufferSize)
-}}
+var rlBufPool sync.Pool
+
+type rlBuf struct {
+	*bytes.Reader
+	b [dataChannelBufferSize]byte
+}
+
+func (r *rlBuf) Close() error {
+	r.Reader = nil
+	rlBufPool.Put(r)
+	return nil
+}
 
 func (d *DataChannel) readLoop() {
 	for {
-		buffer := rlBufPool.Get().([]byte)
-		n, isString, err := d.dataChannel.ReadDataChannel(buffer)
+		var b *rlBuf
+		if v := rlBufPool.Get(); v != nil {
+			b = v.(*rlBuf)
+		} else {
+			b = &rlBuf{}
+		}
+
+		n, isString, err := d.dataChannel.ReadDataChannel(b.b[:])
 		if err != nil {
-			rlBufPool.Put(buffer)
+			rlBufPool.Put(b)
 			d.setReadyState(DataChannelStateClosed)
 			if err != io.EOF {
 				d.onError(err)
@@ -331,13 +347,8 @@ func (d *DataChannel) readLoop() {
 			return
 		}
 
-		m := DataChannelMessage{Data: make([]byte, n), IsString: isString}
-		copy(m.Data, buffer[:n])
-
-		// NB: Why was DataChannelMessage not passed as a pointer value?  The
-		// pragma for Put() is a false positive on the part of the CI linter.
-		d.onMessage(m)        // nolint:staticcheck
-		rlBufPool.Put(buffer) // nolint:staticcheck
+		b.Reader = bytes.NewReader(b.b[:n])
+		d.onMessage(&DataChannelMessage{Data: b, IsString: isString})
 	}
 }
 

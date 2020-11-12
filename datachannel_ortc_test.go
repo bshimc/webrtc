@@ -31,7 +31,8 @@ func TestDataChannel_ORTCE2E(t *testing.T) {
 	stackB.sctp.OnDataChannel(func(d *DataChannel) {
 		close(awaitSetup)
 
-		d.OnMessage(func(msg DataChannelMessage) {
+		d.OnMessage(func(msg *DataChannelMessage) {
+			defer msg.Data.Close()
 			if msg.IsString {
 				close(awaitString)
 			} else {
